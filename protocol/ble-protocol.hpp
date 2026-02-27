@@ -19,9 +19,12 @@
  * functions required to ensure byte-for-byte compatibility.
  *
  * The protocol is designed to support independent development of sensor
- * node firmware, followed by system-level integration with minimal refactoring.
- * All packet structures are packed, versioned and validated at compile time to
- * prevent silent interface changes.
+ * node firmware.
+ * The on-wire format is explicitly serialised in little-endian order to
+ * guarantee deterministic behaviour.
+ *
+ * Logical packet structures are versioned and validated, 
+ * while wire-format sizes are enforced using fixed definitions.
  *
  * All values transmitted over BLE use fixed-width integer representations
  * with explicit scaling (e.g. centi-degrees Celsius, deci-lux, per-mille
@@ -38,7 +41,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 
 /**
  * @brief BLE protocol UUID definitions.
@@ -118,34 +120,24 @@ struct ble_protocol_constants_t final
 	static constexpr std::uint32_t event_lockout_ms = 5000u;
 };
 
-/*
- * Force 1-byte packing for all protocol structs below.
- *
- * This guarantees:
- * - A deterministic, byte-for-byte wire format
- * - Struct layout exactly matches BLE characteristic payloads
- *
- * Only the protocol structs are packed; packing is restored
- * immediately afterwards to avoid affecting the rest of the codebase.
+/**
+ * @brief Fixed payload sizes in bytes.
  */
-#pragma pack(push, 1)
+struct ble_payload_size_t final
+{
+	static constexpr std::size_t telemetry = 14u;
+	static constexpr std::size_t event = 7u;
+	static constexpr std::size_t control = 8u;
+};
 
 /**
- * @brief Periodic telemetry packet sent from sensor node to control node.
- * @note This struct is transmitted verbatim over BLE as a byte array.
- *
- * Field meaning:
- * - SN1:
- *	primary_value		= lux_deci (lux * 10)
- *	secondary_value bit0	= motion_state (0 or 1)
- * - SN2:
- *	primary_value		= temp_centi (degC * 100)
- *	secondary_value bit0	= sound_state (0 or 1)
+ * @brief Periodic telemetry packet (logical fields).
+ * @note This struct is an in-memory representation.
  */
 struct telemetry_packet_t final
 {
-	std::uint8_t protocol_version;
-	std::uint8_t node_id;
+	ble_protocol_version_t protocol_version;
+	ble_node_id_t node_id;
 	std::uint16_t flags;
 	std::int16_t primary_value;
 	std::int16_t secondary_value;
@@ -155,46 +147,32 @@ struct telemetry_packet_t final
 };
 
 /**
- * @brief Event packet sent immediately on edge-triggered events.
+ * @brief Event packet (logical fields).
  */
 struct event_packet_t final
 {
-	std::uint8_t protocol_version;
-	std::uint8_t node_id;
-	std::uint8_t event_type;
+	ble_protocol_version_t protocol_version;
+	ble_node_id_t node_id;
+	ble_event_type_t event_type;
 	std::int16_t event_value;
 	std::uint16_t timestamp_ms_mod;
 };
 
 /**
- * @brief Control packet written by control node to a sensor node.
+ * @brief Control packet (logical fields).
  */
 struct control_packet_t final
 {
-	std::uint8_t protocol_version;
-	std::uint8_t target_node_id;
+	ble_protocol_version_t protocol_version;
+	ble_node_id_t target_node_id;
 	std::uint16_t command_flags;
 	std::uint16_t duty_override;
 	std::uint16_t reserved;
 };
 
-/* Restore packing rules. */
-#pragma pack(pop)
-
-/*
- * Compile-time size checks.
- *
- * These ensure the BLE wire protocol cannot silently change due to:
- * - compiler differences
- * - edits to struct members
- * - changes to packing rules
- */
-static_assert(sizeof(telemetry_packet_t) == 14u,
-	      "telemetry_packet_t size changed");
-static_assert(sizeof(event_packet_t) == 7u,
-	      "event_packet_t size changed");
-static_assert(sizeof(control_packet_t) == 8u,
-	      "control_packet_t size changed");
+static_assert(sizeof(std::uint8_t) == 1u, "uint8_t size unexpected");
+static_assert(sizeof(std::uint16_t) == 2u, "uint16_t size unexpected");
+static_assert(sizeof(std::int16_t) == 2u, "int16_t size unexpected");
 
 /**
  * @brief Convert a telemetry flag to its underlying bit mask.
@@ -247,14 +225,14 @@ static inline constexpr std::uint16_t ble_telemetry_flag_update(
 
 	if (set)
 	{
-		updated = static_cast<std::uint16_t>(updated |
-						     ble_telemetry_flag_mask(flag));
+		updated = static_cast<std::uint16_t>(
+		    updated | ble_telemetry_flag_mask(flag));
 	}
 	else
 	{
-		updated = static_cast<std::uint16_t>(updated &
-						     static_cast<std::uint16_t>(
-							 ~ble_telemetry_flag_mask(flag)));
+		updated = static_cast<std::uint16_t>(
+		    updated & static_cast<std::uint16_t>(
+				  ~ble_telemetry_flag_mask(flag)));
 	}
 
 	return updated;
@@ -292,6 +270,53 @@ static inline constexpr std::uint16_t ble_clamp_duty_per_mille(
 }
 
 /**
+ * @brief Write a little-endian uint16.
+ * @param dst Destination buffer.
+ * @param value Value to write.
+ */
+static inline void ble_write_u16_le(std::uint8_t *dst, std::uint16_t value)
+{
+	dst[0] = static_cast<std::uint8_t>(value & 0xFFu);
+	dst[1] = static_cast<std::uint8_t>((value >> 8) & 0xFFu);
+}
+
+/**
+ * @brief Write a little-endian int16.
+ * @param dst Destination buffer.
+ * @param value Value to write.
+ */
+static inline void ble_write_i16_le(std::uint8_t *dst, std::int16_t value)
+{
+	const std::uint16_t raw = static_cast<std::uint16_t>(value);
+
+	dst[0] = static_cast<std::uint8_t>(raw & 0xFFu);
+	dst[1] = static_cast<std::uint8_t>((raw >> 8) & 0xFFu);
+}
+
+/**
+ * @brief Read a little-endian uint16.
+ * @param src Source buffer.
+ * @return Parsed value.
+ */
+static inline std::uint16_t ble_read_u16_le(const std::uint8_t *src)
+{
+	const std::uint16_t lo = static_cast<std::uint16_t>(src[0]);
+	const std::uint16_t hi = static_cast<std::uint16_t>(src[1]);
+
+	return static_cast<std::uint16_t>(lo | static_cast<std::uint16_t>(hi << 8));
+}
+
+/**
+ * @brief Read a little-endian int16.
+ * @param src Source buffer.
+ * @return Parsed value.
+ */
+static inline std::int16_t ble_read_i16_le(const std::uint8_t *src)
+{
+	return static_cast<std::int16_t>(ble_read_u16_le(src));
+}
+
+/**
  * @brief Validate protocol version on a received packet buffer.
  * @param expected Expected protocol version.
  * @param buffer Source buffer.
@@ -326,7 +351,7 @@ static inline bool ble_validate_protocol_version(
 }
 
 /**
- * @brief Serialise a telemetry packet into a byte buffer.
+ * @brief Serialise a telemetry packet into a byte buffer (wire format).
  * @param dst Destination buffer.
  * @param dst_size Destination buffer size in bytes.
  * @param src Packet to serialise.
@@ -343,18 +368,26 @@ static inline bool ble_pack_telemetry(
 	{
 		ok = false;
 	}
-	else if (dst_size < sizeof(telemetry_packet_t))
+	else if (dst_size < ble_payload_size_t::telemetry)
 	{
 		ok = false;
 	}
-	else if (src.protocol_version !=
-		 static_cast<std::uint8_t>(ble_protocol_version_t::v1))
+	else if (src.protocol_version != ble_protocol_version_t::v1)
 	{
 		ok = false;
 	}
 	else
 	{
-		std::memcpy(dst, &src, sizeof(telemetry_packet_t));
+		dst[0] = static_cast<std::uint8_t>(src.protocol_version);
+		dst[1] = static_cast<std::uint8_t>(src.node_id);
+
+		ble_write_u16_le(&dst[2], src.flags);
+		ble_write_i16_le(&dst[4], src.primary_value);
+		ble_write_i16_le(&dst[6], src.secondary_value);
+		ble_write_u16_le(&dst[8], src.potentiometer_raw);
+		ble_write_u16_le(&dst[10], src.duty_commanded);
+		ble_write_u16_le(&dst[12], src.reserved);
+
 		ok = true;
 	}
 
@@ -362,7 +395,7 @@ static inline bool ble_pack_telemetry(
 }
 
 /**
- * @brief Serialise an event packet into a byte buffer.
+ * @brief Serialise an event packet into a byte buffer (wire format).
  * @param dst Destination buffer.
  * @param dst_size Destination buffer size in bytes.
  * @param src Packet to serialise.
@@ -379,18 +412,23 @@ static inline bool ble_pack_event(
 	{
 		ok = false;
 	}
-	else if (dst_size < sizeof(event_packet_t))
+	else if (dst_size < ble_payload_size_t::event)
 	{
 		ok = false;
 	}
-	else if (src.protocol_version !=
-		 static_cast<std::uint8_t>(ble_protocol_version_t::v1))
+	else if (src.protocol_version != ble_protocol_version_t::v1)
 	{
 		ok = false;
 	}
 	else
 	{
-		std::memcpy(dst, &src, sizeof(event_packet_t));
+		dst[0] = static_cast<std::uint8_t>(src.protocol_version);
+		dst[1] = static_cast<std::uint8_t>(src.node_id);
+		dst[2] = static_cast<std::uint8_t>(src.event_type);
+
+		ble_write_i16_le(&dst[3], src.event_value);
+		ble_write_u16_le(&dst[5], src.timestamp_ms_mod);
+
 		ok = true;
 	}
 
@@ -398,7 +436,7 @@ static inline bool ble_pack_event(
 }
 
 /**
- * @brief Deserialise a control packet from a byte buffer.
+ * @brief Deserialise a control packet from a byte buffer (wire format).
  * @param dst Destination packet.
  * @param src Source buffer.
  * @param src_size Source buffer size in bytes.
@@ -416,13 +454,19 @@ static inline bool ble_unpack_control(
 	{
 		ok = false;
 	}
-	else if (src_size < sizeof(control_packet_t))
+	else if (src_size < ble_payload_size_t::control)
 	{
 		ok = false;
 	}
 	else
 	{
-		std::memcpy(&dst, src, sizeof(control_packet_t));
+		dst.protocol_version = ble_protocol_version_t::v1;
+		dst.target_node_id = static_cast<ble_node_id_t>(src[1]);
+
+		dst.command_flags = ble_read_u16_le(&src[2]);
+		dst.duty_override = ble_read_u16_le(&src[4]);
+		dst.reserved = ble_read_u16_le(&src[6]);
+
 		ok = true;
 	}
 
@@ -434,14 +478,12 @@ static inline bool ble_unpack_control(
  * @param node_id Node ID to embed.
  * @return Initialised packet.
  */
-static inline telemetry_packet_t ble_make_telemetry(
-    ble_node_id_t node_id)
+static inline telemetry_packet_t ble_make_telemetry(ble_node_id_t node_id)
 {
 	telemetry_packet_t pkt{};
 
-	pkt.protocol_version =
-	    static_cast<std::uint8_t>(ble_protocol_version_t::v1);
-	pkt.node_id = static_cast<std::uint8_t>(node_id);
+	pkt.protocol_version = ble_protocol_version_t::v1;
+	pkt.node_id = node_id;
 	pkt.flags = 0u;
 	pkt.primary_value = 0;
 	pkt.secondary_value = 0;
@@ -468,10 +510,9 @@ static inline event_packet_t ble_make_event(
 {
 	event_packet_t pkt{};
 
-	pkt.protocol_version =
-	    static_cast<std::uint8_t>(ble_protocol_version_t::v1);
-	pkt.node_id = static_cast<std::uint8_t>(node_id);
-	pkt.event_type = static_cast<std::uint8_t>(type);
+	pkt.protocol_version = ble_protocol_version_t::v1;
+	pkt.node_id = node_id;
+	pkt.event_type = type;
 	pkt.event_value = value;
 	pkt.timestamp_ms_mod = timestamp_ms_mod;
 
@@ -492,9 +533,8 @@ static inline control_packet_t ble_make_control(
 {
 	control_packet_t pkt{};
 
-	pkt.protocol_version =
-	    static_cast<std::uint8_t>(ble_protocol_version_t::v1);
-	pkt.target_node_id = static_cast<std::uint8_t>(target);
+	pkt.protocol_version = ble_protocol_version_t::v1;
+	pkt.target_node_id = target;
 	pkt.command_flags = flags;
 	pkt.duty_override = ble_clamp_duty_per_mille(duty_override);
 	pkt.reserved = 0u;
@@ -503,18 +543,9 @@ static inline control_packet_t ble_make_control(
 }
 
 /*
- * Test vectors (little-endian).
- *
- * TELEM_1: SN2 telemetry
- * - protocol_version = 1
- * - node_id = 2
- * - flags = help_active
- * - primary_value = 2250 (22.50°C)
- * - secondary_value bit0 = 1 (sound detected)
- * - pot_raw = 2048
- * - duty_commanded = 500 (50%)
+ * Test vectors (wire format, little-endian).
  */
-static constexpr std::uint8_t BLE_TEST_TELEM_1[14] =
+static constexpr std::uint8_t BLE_TEST_TELEM_1[ble_payload_size_t::telemetry] =
     {
 	0x01u, 0x02u,
 	0x01u, 0x00u,
@@ -524,28 +555,13 @@ static constexpr std::uint8_t BLE_TEST_TELEM_1[14] =
 	0xF4u, 0x01u,
 	0x00u, 0x00u};
 
-/*
- * EVENT_1: SN1 motion detected
- * - protocol_version = 1
- * - node_id = 1
- * - event_type = motion_detected
- * - event_value = 1
- * - timestamp = 0x1234
- */
-static constexpr std::uint8_t BLE_TEST_EVENT_1[7] =
+static constexpr std::uint8_t BLE_TEST_EVENT_1[ble_payload_size_t::event] =
     {
 	0x01u, 0x01u, 0x02u,
 	0x01u, 0x00u,
 	0x34u, 0x12u};
 
-/*
- * CTRL_1: CN override enable for SN2, duty_override=750 (75%)
- * - protocol_version = 1
- * - target_node_id = 2
- * - command_flags = override_enable
- * - duty_override = 750
- */
-static constexpr std::uint8_t BLE_TEST_CTRL_1[8] =
+static constexpr std::uint8_t BLE_TEST_CTRL_1[ble_payload_size_t::control] =
     {
 	0x01u, 0x02u,
 	0x01u, 0x00u,
