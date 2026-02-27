@@ -107,10 +107,10 @@ integration.
 
 ## Status
 
-- [ ] Hardware bring-up
-- [ ] Sensor drivers
-- [ ] Local UI
-- [ ] PWM actuator control
+- [x] Hardware bring-up
+- [x] Sensor drivers
+- [x] Local UI
+- [x] PWM actuator control
 - [ ] BLE advertising and characteristics
 - [ ] Telemetry transmission
 - [ ] Event transmission
