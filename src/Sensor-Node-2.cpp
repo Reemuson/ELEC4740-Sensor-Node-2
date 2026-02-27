@@ -1,359 +1,269 @@
 /**
- * @file	main.cpp
- * @brief	Scaffold for SN2
+ * @file	Sensor-Node-2.cpp
+ * @brief	SN2 main entry point
  */
 
 #include "Particle.h"
+
+#include "adc.hpp"
+#include "ble.hpp"
+#include "button.hpp"
+#include "config.hpp"
+#include "error_codes.hpp"
+#include "led.hpp"
+#include "log.hpp"
+#include "ntc_cal.hpp"
+#include "pins.hpp"
+#include "pwm.hpp"
+#include "runtime.hpp"
+#include "sound.hpp"
+#include "state_machine.hpp"
+#include "status.hpp"
+#include "timebase.hpp"
 
 SYSTEM_MODE(MANUAL);
 
 namespace
 {
-	/**
-	 * @brief	Application pin map
-	 */
-	struct pin_map_t
+	static adc_service_t g_adc{};
+	static pwm_service_t g_pwm{};
+	static button_service_t g_button{};
+	static sound_service_t g_sound{};
+	static led_service_t g_led{};
+	static state_machine_t g_sm{};
+	static ble_service_t g_ble{};
+	static rgb_status_service_t g_rgb{};
+	static ntc_calibration_service_t g_ntc_cal{};
+
+	static system_context_t g_ctx{};
+
+	static bool normal_operation_enabled(void)
 	{
-		pin_t adc_pot_pin;
-		pin_t adc_ntc_pin;
-		pin_t pwm_fan_pin;
-		pin_t gpio_button_pin;
-		pin_t gpio_sound_pin;
-		pin_t led_red_pin;
-		pin_t led_green_pin;
-	};
-
-	static const pin_map_t g_pins =
-	    {
-		.adc_pot_pin = A1,
-		.adc_ntc_pin = A5,
-		.pwm_fan_pin = A2,
-		.gpio_button_pin = S4,
-		.gpio_sound_pin = D2,
-		.led_red_pin = D4,
-		.led_green_pin = D3};
-
-	static const uint32_t g_serial_baudrate = 115200U;
-
-	static const uint16_t g_adc_max_count = 4095U;
-	static const uint32_t g_adc_reference_mv = 3300U;
-
-	static const uint32_t g_poll_period_ms = 200U;
-	static const uint32_t g_heartbeat_period_ms = 500U;
-
-	static const uint32_t g_button_debounce_ms = 40U;
-
-	static const uint32_t g_sound_min_pulse_spacing_us = 2000U;
-
-	static const uint32_t g_pwm_frequency_hz = 25000U;
-
-	static const uint8_t g_pwm_duty_min = 0U;
-	static const uint8_t g_pwm_duty_max = 255U;
-
-	static volatile bool g_button_irq_flag = false;
-
-	static volatile uint32_t g_sound_pulse_count = 0U;
-	static volatile uint32_t g_sound_last_pulse_us = 0U;
-
-	/**
-	 * @brief	Convert ADC counts to millivolts
-	 * @param	adc_count ADC raw count
-	 * @return	Millivolts corresponding to the ADC count
-	 */
-	static uint32_t adc_count_to_mv(uint16_t adc_count)
-	{
-		uint32_t mv = 0U;
-
-		if (adc_count > g_adc_max_count)
-		{
-			adc_count = g_adc_max_count;
-		}
-
-		mv = (static_cast<uint32_t>(adc_count) * g_adc_reference_mv) /
-		     static_cast<uint32_t>(g_adc_max_count);
-
-		return mv;
+		const runtime_mode_t m = runtime_get_mode();
+		return !m.calibration_active;
 	}
 
-	/**
-	 * @brief	Map ADC counts to 8-bit PWM duty
-	 * @param	adc_count ADC raw count
-	 * @return	PWM duty in range [0..255]
-	 */
-	static uint8_t adc_count_to_pwm_duty(uint16_t adc_count)
+	static void build_led_command(std::uint32_t now_ms,
+				      led_command_t *out_command)
 	{
-		uint32_t duty = 0U;
+		(void)now_ms;
 
-		if (adc_count > g_adc_max_count)
-		{
-			adc_count = g_adc_max_count;
-		}
-
-		duty = (static_cast<uint32_t>(adc_count) *
-			static_cast<uint32_t>(g_pwm_duty_max)) /
-		       static_cast<uint32_t>(g_adc_max_count);
-
-		if (duty > static_cast<uint32_t>(g_pwm_duty_max))
-		{
-			duty = static_cast<uint32_t>(g_pwm_duty_max);
-		}
-
-		return static_cast<uint8_t>(duty);
-	}
-
-	/**
-	 * @brief	Read ADC with simple oversampling and channel-settle discard
-	 * @param	pin ADC pin
-	 * @param	samples Number of samples to average (bounded)
-	 * @param	out_adc_count Output averaged ADC count
-	 * @return	true on success, false otherwise
-	 */
-	static bool analog_read_oversampled(
-	    pin_t pin,
-	    uint8_t samples,
-	    uint16_t *out_adc_count)
-	{
-		uint32_t sum = 0U;
-		uint8_t index = 0U;
-		int reading = 0;
-
-		if ((pin == PIN_INVALID) || (out_adc_count == nullptr))
-		{
-			return false;
-		}
-
-		if (samples == 0U)
-		{
-			return false;
-		}
-
-		if (samples > 32U)
-		{
-			samples = 32U;
-		}
-
-		reading = analogRead(pin);
-		(void)reading;
-
-		for (index = 0U; index < samples; index++)
-		{
-			reading = analogRead(pin);
-
-			if (reading < 0)
-			{
-				*out_adc_count = 0U;
-				return false;
-			}
-
-			if (reading > static_cast<int>(g_adc_max_count))
-			{
-				reading = static_cast<int>(g_adc_max_count);
-			}
-
-			sum += static_cast<uint32_t>(reading);
-		}
-
-		*out_adc_count = static_cast<uint16_t>(sum / samples);
-
-		return true;
-	}
-
-	/**
-	 * @brief	Set a GPIO output safely
-	 * @param	pin Target pin
-	 * @param	state Logic level to drive
-	 * @return	true on success, false otherwise
-	 */
-	static bool safe_digital_write(pin_t pin, bool state)
-	{
-		if (pin == PIN_INVALID)
-		{
-			return false;
-		}
-
-		digitalWrite(pin, state ? HIGH : LOW);
-
-		return true;
-	}
-
-	/**
-	 * @brief	Set PWM output safely at a specified frequency
-	 * @param	pin Target PWM pin
-	 * @param	duty PWM duty [0..255]
-	 * @return	true on success, false otherwise
-	 */
-	static bool safe_pwm_write(pin_t pin, uint8_t duty)
-	{
-		if (pin == PIN_INVALID)
-		{
-			return false;
-		}
-
-		analogWrite(pin, static_cast<int>(duty), g_pwm_frequency_hz);
-
-		return true;
-	}
-
-	/**
-	 * @brief	Button interrupt service routine
-	 */
-	static void button_isr(void)
-	{
-		g_button_irq_flag = true;
-	}
-
-	/**
-	 * @brief	Sound interrupt service routine (LM393 open-collector active-low)
-	 *
-	 * @note	Deglitch by enforcing a minimum pulse spacing.
-	 */
-	static void sound_isr(void)
-	{
-		const uint32_t now_us = micros();
-		const uint32_t delta_us = now_us - g_sound_last_pulse_us;
-
-		if (delta_us >= g_sound_min_pulse_spacing_us)
-		{
-			g_sound_last_pulse_us = now_us;
-			g_sound_pulse_count++;
-		}
-	}
-
-	/**
-	 * @brief	Initialise GPIO directions and safe defaults
-	 */
-	static void initialise_hardware(void)
-	{
-		pinMode(g_pins.led_red_pin, OUTPUT);
-		pinMode(g_pins.led_green_pin, OUTPUT);
-
-		pinMode(g_pins.pwm_fan_pin, OUTPUT);
-
-		pinMode(g_pins.gpio_button_pin, INPUT_PULLUP);
-		pinMode(g_pins.gpio_sound_pin, INPUT);
-
-		(void)safe_digital_write(g_pins.led_red_pin, false);
-		(void)safe_digital_write(g_pins.led_green_pin, false);
-		(void)safe_pwm_write(g_pins.pwm_fan_pin, g_pwm_duty_min);
-
-		attachInterrupt(g_pins.gpio_button_pin, button_isr, FALLING);
-		attachInterrupt(g_pins.gpio_sound_pin, sound_isr, FALLING);
-	}
-
-	/**
-	 * @brief	Simple heartbeat LED toggle
-	 * @param	now_ms Current time in ms
-	 */
-	static void service_heartbeat(uint32_t now_ms)
-	{
-		static uint32_t last_toggle_ms = 0U;
-		static bool led_state = false;
-
-		if ((now_ms - last_toggle_ms) >= g_heartbeat_period_ms)
-		{
-			last_toggle_ms = now_ms;
-			led_state = !led_state;
-			(void)safe_digital_write(g_pins.led_green_pin, led_state);
-		}
-	}
-
-	/**
-	 * @brief	Service button debouncing and behaviour
-	 * @param	now_ms Current time in ms
-	 */
-	static void service_button(uint32_t now_ms)
-	{
-		static bool debounce_active = false;
-		static uint32_t debounce_start_ms = 0U;
-		static bool red_led_state = false;
-
-		if (g_button_irq_flag)
-		{
-			g_button_irq_flag = false;
-			debounce_active = true;
-			debounce_start_ms = now_ms;
-		}
-
-		if (debounce_active)
-		{
-			if ((now_ms - debounce_start_ms) >= g_button_debounce_ms)
-			{
-				debounce_active = false;
-
-				if (digitalRead(g_pins.gpio_button_pin) == LOW)
-				{
-					red_led_state = !red_led_state;
-					(void)safe_digital_write(
-					    g_pins.led_red_pin,
-					    red_led_state);
-				}
-			}
-		}
-	}
-
-	/**
-	 * @brief	Service ADC and PWM control loop
-	 * @param	now_ms Current time in ms
-	 */
-	static void service_analog_and_pwm(uint32_t now_ms)
-	{
-		static uint32_t last_poll_ms = 0U;
-
-		uint16_t pot_adc = 0U;
-		uint16_t ntc_adc = 0U;
-
-		uint32_t pot_mv = 0U;
-		uint32_t ntc_mv = 0U;
-
-		uint8_t pwm_duty = 0U;
-
-		if ((now_ms - last_poll_ms) < g_poll_period_ms)
+		if (out_command == nullptr)
 		{
 			return;
 		}
 
-		last_poll_ms = now_ms;
+		out_command->red = led_mode_t::off;
+		out_command->green = led_mode_t::off;
 
-		if (!analog_read_oversampled(g_pins.adc_pot_pin, 8U, &pot_adc))
+		if (g_ctx.state == system_state_t::fault)
+		{
+			out_command->red = led_mode_t::flash_fast;
+			return;
+		}
+
+		if (g_ctx.help_active)
+		{
+			out_command->red = g_ctx.sound_alert_active ? led_mode_t::flash_slow : led_mode_t::on;
+			return;
+		}
+
+		if (g_ctx.sound_alert_active)
+		{
+			out_command->green = led_mode_t::flash_slow;
+			return;
+		}
+	}
+
+	static rgb_mode_t build_rgb_mode(void)
+	{
+		if (g_ble.link_state() == ble_link_state_t::linked)
+		{
+			return rgb_mode_t::solid_green;
+		}
+
+		return rgb_mode_t::flash_green;
+	}
+
+	static void service_sound_alert_timeout(std::uint32_t now_ms,
+						std::uint32_t last_sound_ms)
+	{
+		if (!g_ctx.sound_alert_active)
 		{
 			return;
 		}
 
-		if (!analog_read_oversampled(g_pins.adc_ntc_pin, 10U, &ntc_adc))
+		if ((now_ms - last_sound_ms) >= app_config_t::sound_alert_hold_ms)
 		{
-			return;
+			g_ctx.sound_alert_active = false;
 		}
-
-		pwm_duty = adc_count_to_pwm_duty(pot_adc);
-		(void)safe_pwm_write(g_pins.pwm_fan_pin, pwm_duty);
-
-		pot_mv = adc_count_to_mv(pot_adc);
-		ntc_mv = adc_count_to_mv(ntc_adc);
-
-		Serial.printf(
-		    "pot=%4u (%4lumV) ntc=%4u (%4lumV) pwm=%3u "
-		    "sound=%lu\r\n",
-		    static_cast<unsigned>(pot_adc),
-		    static_cast<unsigned long>(pot_mv),
-		    static_cast<unsigned>(ntc_adc),
-		    static_cast<unsigned long>(ntc_mv),
-		    static_cast<unsigned>(pwm_duty),
-		    static_cast<unsigned long>(g_sound_pulse_count));
 	}
 }
 
 void setup(void)
 {
-	Serial.begin(g_serial_baudrate);
+	const board_pins_t &pins = board_pins_get();
+	const std::uint32_t now_ms = timebase_now_ms();
 
-	initialise_hardware();
+	Serial.begin(app_config_t::serial_baudrate);
+
+	(void)g_adc.initialise();
+	(void)g_pwm.initialise(pins.pwm_fan_pin);
+	(void)g_button.initialise(pins.gpio_button_pin);
+	(void)g_sound.initialise(pins.gpio_sound_pin);
+	(void)g_ntc_cal.initialise(pins.adc_ntc_pin);
+
+	{
+		const led_pins_t led_pins =
+		    {
+			.red_pin = pins.led_bicolour_red_pin,
+			.green_pin = pins.led_bicolour_green_pin,
+			.module_pin = pins.led_on_module_pin,
+			.red_polarity = led_polarity_t::active_high,
+			.green_polarity = led_polarity_t::active_high,
+			.module_polarity = led_polarity_t::active_high};
+
+		(void)g_led.initialise(led_pins);
+	}
+
+	(void)g_sm.initialise(now_ms, &g_ctx);
+	(void)g_ble.initialise();
+	(void)g_rgb.initialise();
+
+	(void)g_sm.dispatch(now_ms, app_event_t::boot_complete,
+			    error_code_t::none, &g_ctx);
 }
 
 void loop(void)
 {
-	const uint32_t now_ms = millis();
+	static std::uint32_t last_poll_ms = 0u;
+	static std::uint32_t last_sound_ms = 0u;
 
-	service_heartbeat(now_ms);
-	service_button(now_ms);
-	service_analog_and_pwm(now_ms);
+	const board_pins_t &pins = board_pins_get();
+	const std::uint32_t now_ms = timebase_now_ms();
+
+	button_event_t button_event{};
+	sound_event_t sound_event{};
+	adc_sample_t adc_sample{};
+	led_command_t led_command{};
+
+	(void)g_ntc_cal.service(now_ms);
+
+	if (normal_operation_enabled())
+	{
+		(void)g_ble.service(now_ms);
+
+		(void)g_button.service(now_ms,
+				       app_config_t::button_debounce_ms, &button_event);
+
+		if (button_event.toggled)
+		{
+			(void)g_sm.dispatch(now_ms, app_event_t::help_toggled,
+					    error_code_t::none, &g_ctx);
+		}
+
+		(void)g_sound.service(now_ms, app_config_t::sound_alert_hold_ms,
+				      &sound_event);
+
+		if (sound_event.triggered)
+		{
+			last_sound_ms = now_ms;
+			g_ctx.sound_alert_active = true;
+		}
+
+		service_sound_alert_timeout(now_ms, last_sound_ms);
+
+		if ((now_ms - last_poll_ms) >= app_config_t::poll_period_ms)
+		{
+			std::uint8_t duty = 0u;
+			std::int32_t temp_centi_c = 0;
+			bool temp_valid = false;
+
+			last_poll_ms = now_ms;
+
+			if (!g_adc.sample(pins.adc_pot_pin, pins.adc_ntc_pin,
+					  &adc_sample))
+			{
+				(void)g_sm.dispatch(now_ms, app_event_t::fault_set,
+						    error_code_t::adc_failed, &g_ctx);
+			}
+			else
+			{
+				duty = g_pwm.adc_count_to_duty(adc_sample.pot_adc);
+
+				if (!g_pwm.write(pins.pwm_fan_pin, duty,
+						 app_config_t::pwm_frequency_hz))
+				{
+					(void)g_sm.dispatch(now_ms,
+							    app_event_t::fault_set,
+							    error_code_t::pwm_failed,
+							    &g_ctx);
+				}
+
+				temp_valid =
+				    g_ntc_cal.adc_mv_to_temperature_centi_c(
+					adc_sample.ntc_mv,
+					&temp_centi_c);
+
+				if (temp_valid)
+				{
+					const std::int32_t whole_c = temp_centi_c / 100;
+					std::int32_t frac_c = temp_centi_c % 100;
+
+					if (frac_c < 0)
+					{
+						frac_c = -frac_c;
+					}
+
+					log_printf(log_level_t::info,
+						   "pot=%4u (%4lumV) ntc=%4u "
+						   "(%4lumV) temp=%ld.%02ldC "
+						   "pwm=%3u sound=%lu help=%u\r\n",
+						   static_cast<unsigned>(adc_sample.pot_adc),
+						   static_cast<unsigned long>(adc_sample.pot_mv),
+						   static_cast<unsigned>(adc_sample.ntc_adc),
+						   static_cast<unsigned long>(adc_sample.ntc_mv),
+						   static_cast<long>(whole_c),
+						   static_cast<long>(frac_c),
+						   static_cast<unsigned>(duty),
+						   static_cast<unsigned long>(sound_event.pulse_count),
+						   static_cast<unsigned>(g_ctx.help_active ? 1u : 0u));
+				}
+				else
+				{
+					log_printf(log_level_t::info,
+						   "pot=%4u (%4lumV) ntc=%4u "
+						   "(%4lumV) temp=na pwm=%3u "
+						   "sound=%lu help=%u\r\n",
+						   static_cast<unsigned>(
+						       adc_sample.pot_adc),
+						   static_cast<unsigned long>(
+						       adc_sample.pot_mv),
+						   static_cast<unsigned>(
+						       adc_sample.ntc_adc),
+						   static_cast<unsigned long>(
+						       adc_sample.ntc_mv),
+						   static_cast<unsigned>(duty),
+						   static_cast<unsigned long>(
+						       sound_event.pulse_count),
+						   static_cast<unsigned>(
+						       g_ctx.help_active ? 1u : 0u));
+				}
+			}
+		}
+
+		build_led_command(now_ms, &led_command);
+		g_led.service(now_ms, led_command);
+
+		g_rgb.service(now_ms, build_rgb_mode());
+	}
+	else
+	{
+		(void)g_pwm.write(pins.pwm_fan_pin, 0u,
+				  app_config_t::pwm_frequency_hz);
+
+		led_command.red = led_mode_t::off;
+		led_command.green = led_mode_t::off;
+		g_led.service(now_ms, led_command);
+	}
 }

@@ -126,6 +126,27 @@ integration.
 
 ---
 
+## Calibration of NTC
+
+```
+cal start
+cal set r_series_ohms 100000
+cal set ref_mv 3300
+
+cal point set 1 500
+cal point capture 1
+
+cal point set 2 2500
+cal point capture 2
+
+cal point set 3 4500
+cal point capture 3
+
+cal solve
+cal save
+cal show
+```
+
 ## Authors
 
 - Ryan Hicks
