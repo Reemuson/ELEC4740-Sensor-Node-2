@@ -345,6 +345,13 @@ bool ntc_calibration_service_t::handle_command(const char *line)
 		return true;
 	}
 
+	if (std::strncmp(line, "cal eeprom show", 15) == 0)
+	{
+		(void)load_from_eeprom();
+		print_status();
+		return true;
+	}
+
 	if (std::strncmp(line, "cal start", 9) == 0)
 	{
 		clear_session();
