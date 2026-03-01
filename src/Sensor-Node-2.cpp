@@ -7,6 +7,7 @@
 
 #include "adc.hpp"
 #include "ble.hpp"
+#include "mode.hpp"
 #include "button.hpp"
 #include "config.hpp"
 #include "error_codes.hpp"
@@ -98,6 +99,73 @@ namespace
 			g_ctx.sound_alert_active = false;
 		}
 	}
+
+	static void indicate_debug_mode(std::uint32_t now_ms)
+	{
+		led_command_t cmd{};
+
+		(void)now_ms;
+
+		cmd.red = led_mode_t::flash_slow;
+		cmd.green = led_mode_t::flash_slow;
+
+		g_led.service(timebase_now_ms(), cmd);
+	}
+
+	static void debug_log_sample(const adc_sample_t &adc_sample,
+				     std::uint8_t duty,
+				     const sound_event_t &sound_event,
+				     bool temp_valid,
+				     std::int32_t temp_centi_c)
+	{
+		const runtime_mode_t m = runtime_get_mode();
+
+		if (!m.debug_prints_enabled)
+		{
+			return;
+		}
+
+		if (temp_valid)
+		{
+			const std::int32_t whole_c = temp_centi_c / 100;
+			std::int32_t frac_c = temp_centi_c % 100;
+
+			if (frac_c < 0)
+			{
+				frac_c = -frac_c;
+			}
+
+			log_printf(log_level_t::info,
+				   "pot=%4u (%4lumV) ntc=%4u (%4lumV) "
+				   "temp=%ld.%02ldC pwm=%3u sound=%lu help=%u\r\n",
+				   static_cast<unsigned>(adc_sample.pot_adc),
+				   static_cast<unsigned long>(adc_sample.pot_mv),
+				   static_cast<unsigned>(adc_sample.ntc_adc),
+				   static_cast<unsigned long>(adc_sample.ntc_mv),
+				   static_cast<long>(whole_c),
+				   static_cast<long>(frac_c),
+				   static_cast<unsigned>(duty),
+				   static_cast<unsigned long>(
+				       sound_event.pulse_count),
+				   static_cast<unsigned>(
+				       g_ctx.help_active ? 1u : 0u));
+		}
+		else
+		{
+			log_printf(log_level_t::info,
+				   "pot=%4u (%4lumV) ntc=%4u (%4lumV) "
+				   "temp=na pwm=%3u sound=%lu help=%u\r\n",
+				   static_cast<unsigned>(adc_sample.pot_adc),
+				   static_cast<unsigned long>(adc_sample.pot_mv),
+				   static_cast<unsigned>(adc_sample.ntc_adc),
+				   static_cast<unsigned long>(adc_sample.ntc_mv),
+				   static_cast<unsigned>(duty),
+				   static_cast<unsigned long>(
+				       sound_event.pulse_count),
+				   static_cast<unsigned>(
+				       g_ctx.help_active ? 1u : 0u));
+		}
+	}
 }
 
 void setup(void)
@@ -105,7 +173,14 @@ void setup(void)
 	const board_pins_t &pins = board_pins_get();
 	const std::uint32_t now_ms = timebase_now_ms();
 
+	boot_mode_t boot_mode{};
+
 	Serial.begin(app_config_t::serial_baudrate);
+
+	boot_mode = boot_mode_detect_debug(pins.gpio_button_pin,
+					   5000u, 6000u);
+
+	runtime_initialise(boot_mode.debug_mode);
 
 	(void)g_adc.initialise();
 	(void)g_pwm.initialise(pins.pwm_fan_pin);
@@ -132,6 +207,17 @@ void setup(void)
 
 	(void)g_sm.dispatch(now_ms, app_event_t::boot_complete,
 			    error_code_t::none, &g_ctx);
+
+	if (runtime_get_mode().debug_mode)
+	{
+		const std::uint32_t start_ms = timebase_now_ms();
+
+		while ((timebase_now_ms() - start_ms) < 5000u)
+		{
+			indicate_debug_mode(timebase_now_ms());
+			delay(20);
+		}
+	}
 }
 
 void loop(void)
@@ -147,7 +233,12 @@ void loop(void)
 	adc_sample_t adc_sample{};
 	led_command_t led_command{};
 
-	(void)g_ntc_cal.service(now_ms);
+	const runtime_mode_t mode = runtime_get_mode();
+
+	if (mode.debug_mode)
+	{
+		(void)g_ntc_cal.service(now_ms);
+	}
 
 	if (normal_operation_enabled())
 	{
@@ -184,12 +275,14 @@ void loop(void)
 			if (!g_adc.sample(pins.adc_pot_pin, pins.adc_ntc_pin,
 					  &adc_sample))
 			{
-				(void)g_sm.dispatch(now_ms, app_event_t::fault_set,
+				(void)g_sm.dispatch(now_ms,
+						    app_event_t::fault_set,
 						    error_code_t::adc_failed, &g_ctx);
 			}
 			else
 			{
-				duty = g_pwm.adc_count_to_duty(adc_sample.pot_adc);
+				duty = g_pwm.adc_count_to_duty(
+				    adc_sample.pot_adc);
 
 				if (!g_pwm.write(pins.pwm_fan_pin, duty,
 						 app_config_t::pwm_frequency_hz))
@@ -205,50 +298,8 @@ void loop(void)
 					adc_sample.ntc_mv,
 					&temp_centi_c);
 
-				if (temp_valid)
-				{
-					const std::int32_t whole_c = temp_centi_c / 100;
-					std::int32_t frac_c = temp_centi_c % 100;
-
-					if (frac_c < 0)
-					{
-						frac_c = -frac_c;
-					}
-
-					log_printf(log_level_t::info,
-						   "pot=%4u (%4lumV) ntc=%4u "
-						   "(%4lumV) temp=%ld.%02ldC "
-						   "pwm=%3u sound=%lu help=%u\r\n",
-						   static_cast<unsigned>(adc_sample.pot_adc),
-						   static_cast<unsigned long>(adc_sample.pot_mv),
-						   static_cast<unsigned>(adc_sample.ntc_adc),
-						   static_cast<unsigned long>(adc_sample.ntc_mv),
-						   static_cast<long>(whole_c),
-						   static_cast<long>(frac_c),
-						   static_cast<unsigned>(duty),
-						   static_cast<unsigned long>(sound_event.pulse_count),
-						   static_cast<unsigned>(g_ctx.help_active ? 1u : 0u));
-				}
-				else
-				{
-					log_printf(log_level_t::info,
-						   "pot=%4u (%4lumV) ntc=%4u "
-						   "(%4lumV) temp=na pwm=%3u "
-						   "sound=%lu help=%u\r\n",
-						   static_cast<unsigned>(
-						       adc_sample.pot_adc),
-						   static_cast<unsigned long>(
-						       adc_sample.pot_mv),
-						   static_cast<unsigned>(
-						       adc_sample.ntc_adc),
-						   static_cast<unsigned long>(
-						       adc_sample.ntc_mv),
-						   static_cast<unsigned>(duty),
-						   static_cast<unsigned long>(
-						       sound_event.pulse_count),
-						   static_cast<unsigned>(
-						       g_ctx.help_active ? 1u : 0u));
-				}
+				debug_log_sample(adc_sample, duty, sound_event,
+						 temp_valid, temp_centi_c);
 			}
 		}
 

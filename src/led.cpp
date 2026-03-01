@@ -8,8 +8,11 @@
 #include "config.hpp"
 #include "gpio_helpers.hpp"
 
-static const std::uint32_t g_flash_slow_ms = 500u;
-static const std::uint32_t g_flash_fast_ms = 125u;
+namespace
+{
+	static const std::uint32_t flash_slow_ms = 500u;
+	static const std::uint32_t flash_fast_ms = 125u;
+}
 
 bool led_service_t::initialise(const led_pins_t &pins)
 {
@@ -28,6 +31,9 @@ bool led_service_t::initialise(const led_pins_t &pins)
 		pinMode(pins_.module_pin, OUTPUT);
 	}
 
+	bicolour_red_ = false;
+	bicolour_green_ = false;
+
 	(void)write_led(pins_.red_pin, pins_.red_polarity, false);
 	(void)write_led(pins_.green_pin, pins_.green_polarity, false);
 
@@ -37,6 +43,12 @@ bool led_service_t::initialise(const led_pins_t &pins)
 	}
 
 	return true;
+}
+
+void led_service_t::set_bicolour(bool red, bool green)
+{
+	bicolour_red_ = red;
+	bicolour_green_ = green;
 }
 
 bool led_service_t::write_led(pin_t pin, led_polarity_t polarity, bool on)
@@ -57,11 +69,11 @@ bool led_service_t::compute_flash(std::uint32_t now_ms, led_mode_t mode)
 
 	if (mode == led_mode_t::flash_slow)
 	{
-		period = g_flash_slow_ms;
+		period = flash_slow_ms;
 	}
 	else if (mode == led_mode_t::flash_fast)
 	{
-		period = g_flash_fast_ms;
+		period = flash_fast_ms;
 	}
 	else
 	{
@@ -75,7 +87,7 @@ void led_service_t::service(std::uint32_t now_ms, const led_command_t &command)
 {
 	bool red_on = false;
 	bool green_on = false;
-	bool hb_on = false;
+	bool module_on = false;
 
 	if (command.red == led_mode_t::on)
 	{
@@ -97,13 +109,20 @@ void led_service_t::service(std::uint32_t now_ms, const led_command_t &command)
 		green_on = compute_flash(now_ms, command.green);
 	}
 
-	hb_on = ((now_ms / app_config_t::heartbeat_period_ms) % 2u) == 0u;
+	if ((command.red == led_mode_t::off) &&
+	    (command.green == led_mode_t::off))
+	{
+		red_on = bicolour_red_;
+		green_on = bicolour_green_;
+	}
+
+	module_on = ((now_ms / app_config_t::heartbeat_period_ms) % 2u) == 0u;
 
 	(void)write_led(pins_.red_pin, pins_.red_polarity, red_on);
 	(void)write_led(pins_.green_pin, pins_.green_polarity, green_on);
 
 	if (pins_.module_pin != PIN_INVALID)
 	{
-		(void)write_led(pins_.module_pin, pins_.module_polarity, hb_on);
+		(void)write_led(pins_.module_pin, pins_.module_polarity, module_on);
 	}
 }

@@ -43,4 +43,9 @@ struct app_config_t final
 	static constexpr std::uint32_t pwm_frequency_hz = 25000u;
 	static constexpr std::uint8_t pwm_duty_min = 0u;
 	static constexpr std::uint8_t pwm_duty_max = 255u;
+
+	static constexpr std::uint32_t debug_mode_hold_ms = 5000u;
+	static constexpr std::uint32_t debug_mode_poll_ms = 20u;
+
+	static constexpr std::uint32_t debug_mode_indicator_ms = 5000u;
 };

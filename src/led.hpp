@@ -1,6 +1,6 @@
 /**
  * @file	led.hpp
- * @brief	LED control service for bicolour LED and module LED
+ * @brief	LED control service interface
  */
 
 #pragma once
@@ -19,7 +19,7 @@ enum class led_polarity_t : std::uint8_t
 };
 
 /**
- * @brief	LED mode
+ * @brief	LED modes
  */
 enum class led_mode_t : std::uint8_t
 {
@@ -30,16 +30,7 @@ enum class led_mode_t : std::uint8_t
 };
 
 /**
- * @brief	Bicolour LED command
- */
-struct led_command_t final
-{
-	led_mode_t red;
-	led_mode_t green;
-};
-
-/**
- * @brief	LED pin configuration
+ * @brief	LED pin set
  */
 struct led_pins_t final
 {
@@ -52,7 +43,16 @@ struct led_pins_t final
 };
 
 /**
- * @brief	LED service
+ * @brief	LED command
+ */
+struct led_command_t final
+{
+	led_mode_t red;
+	led_mode_t green;
+};
+
+/**
+ * @brief	LED control service
  */
 struct led_service_t final
 {
@@ -64,15 +64,24 @@ struct led_service_t final
 	bool initialise(const led_pins_t &pins);
 
 	/**
-	 * @brief	Service LED timing and update outputs
+	 * @brief	Service LED outputs
 	 * @param	now_ms Current time
 	 * @param	command LED command
 	 */
 	void service(std::uint32_t now_ms, const led_command_t &command);
+
+	/**
+	 * @brief	Set steady bicolour indication
+	 * @param	red true to enable red channel
+	 * @param	green true to enable green channel
+	 */
+	void set_bicolour(bool red, bool green);
 
 private:
 	bool write_led(pin_t pin, led_polarity_t polarity, bool on);
 	bool compute_flash(std::uint32_t now_ms, led_mode_t mode);
 
 	led_pins_t pins_{};
+	bool bicolour_red_{false};
+	bool bicolour_green_{false};
 };

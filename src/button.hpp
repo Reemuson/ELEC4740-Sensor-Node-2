@@ -46,6 +46,14 @@ struct button_service_t final
 	 */
 	bool help_is_active(void) const;
 
+	/**
+	 * @brief	Read button state without debouncing
+	 * @return	true if pressed, false otherwise
+	 *
+	 * @note	Active-low input.
+	 */
+	bool is_pressed_raw(void) const;
+
 private:
 	static void isr_thunk(void);
 

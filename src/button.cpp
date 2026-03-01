@@ -32,6 +32,16 @@ bool button_service_t::initialise(pin_t pin)
 	return true;
 }
 
+bool button_service_t::is_pressed_raw(void) const
+{
+	if (pin_ == PIN_INVALID)
+	{
+		return false;
+	}
+
+	return (digitalRead(pin_) == LOW);
+}
+
 bool button_service_t::service(
     std::uint32_t now_ms,
     std::uint32_t debounce_ms,
@@ -65,7 +75,7 @@ bool button_service_t::service(
 
 	debounce_active_ = false;
 
-	pressed = (digitalRead(pin_) == LOW);
+	pressed = is_pressed_raw();
 	if (!pressed)
 	{
 		return true;

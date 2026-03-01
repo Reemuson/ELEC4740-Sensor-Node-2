@@ -46,7 +46,7 @@ void log_printf(log_level_t level, const char *format, ...)
 	}
 
 	m = runtime_get_mode();
-	if (!m.debug_enabled)
+	if (!m.debug_prints_enabled)
 	{
 		return;
 	}
