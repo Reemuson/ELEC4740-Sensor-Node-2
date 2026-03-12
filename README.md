@@ -1,9 +1,9 @@
 # Sensor Node 2 (SN2)
 
-Firmware for **Sensor Node 2 (SN2)** in the ELEC4740 Internet of Things
-design project. SN2 is responsible for **environmental monitoring**
-and **local actuation**, and operates as a **Bluetooth Low Energy (BLE)
-peripheral**.
+Firmware for Sensor Node 2 (SN2) in the ELEC4740 Internet of Things
+design project. SN2 is responsible for environmental monitoring
+and actuation, and operates as a Bluetooth Low Energy (BLE)
+peripheral.
 
 ---
 
@@ -13,10 +13,15 @@ peripheral**.
 - Platform: Particle Photon 2
 - Device OS: 6.3.4
 - Language: C++
-- Role: BLE Peripheral (sensor node)
 
 SN2 communicates with other nodes using a shared BLE protocol defined
 in a separate protocol module.
+
+--- 
+
+## Hardware
+
+The hardware design is documented in this [repository](https://github.com/Reemuson/ELEC4740-Sensor-Node-2-Board).
 
 ---
 
@@ -33,7 +38,7 @@ In Part 1, SN2 is responsible for:
   - Help button
   - Status LEDs
 - Periodic telemetry generation
-- Event detection and reporting (local)
+- Event detection and reporting
 
 ### Part 2 (System Integration)
 
@@ -42,7 +47,6 @@ In Part 2, SN2 will additionally:
 - Communicate with a BLE control node
 - Transmit telemetry and events over BLE
 - Accept override commands for fan control
-- Support integrated system demonstrations
 
 ---
 
@@ -52,7 +56,7 @@ All BLE communication conforms to the shared protocol contract defined in:
 
 `protocol/ble_protocol.hpp`
 
-This file is **authoritative** and defines:
+This file defines:
 
 - UUIDs
 - Packet layouts and sizes
@@ -60,15 +64,12 @@ This file is **authoritative** and defines:
 - Event semantics
 - Control behaviour
 
-SN2 must not deviate from this definition.
-
 ---
 
 ## Repository Structure
 
 ```
 ├── src/ # Application source code
-├── lib/ # Local libraries and drivers
 ├── protocol/ # Shared BLE protocol definition
 │ ├── ble_protocol.hpp
 │ └── README.md
@@ -88,21 +89,6 @@ Typical workflow:
 3. Compile and flash via USB
 4. Monitor logs using the Particle Serial Monitor
 
-> Detailed build instructions will be added once firmware features stabilise.
-
----
-
-## Design Notes
-
-- All BLE payloads use fixed-width integers
-- No floating-point values are transmitted over BLE
-- No dynamic memory allocation is used
-- Protocol structures are compile-time size checked
-- Behaviour is deterministic and event-driven
-
-These design choices support reliability, testability and predictable
-integration.
-
 ---
 
 ## Status
@@ -115,14 +101,6 @@ integration.
 - [ ] Telemetry transmission
 - [ ] Event transmission
 - [ ] Control override handling
-
----
-
-## Notes and TODO
-
-- Final sensor selection and calibration details to be documented
-- Power consumption measurements to be added in Part 2
-- Integration notes with control node to be added post-integration
 
 ---
 
