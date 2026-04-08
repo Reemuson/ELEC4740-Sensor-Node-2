@@ -15,6 +15,7 @@
 struct sound_event_t final
 {
 	bool triggered;
+	bool alert_active;
 	std::uint32_t pulse_count;
 };
 
@@ -58,4 +59,5 @@ private:
 
 	pin_t pin_{PIN_INVALID};
 	std::uint32_t last_event_ms_{0u};
+	std::uint32_t last_seen_count_{0u};
 };

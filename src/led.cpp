@@ -31,9 +31,6 @@ bool led_service_t::initialise(const led_pins_t &pins)
 		pinMode(pins_.module_pin, OUTPUT);
 	}
 
-	bicolour_red_ = false;
-	bicolour_green_ = false;
-
 	(void)write_led(pins_.red_pin, pins_.red_polarity, false);
 	(void)write_led(pins_.green_pin, pins_.green_polarity, false);
 
@@ -43,12 +40,6 @@ bool led_service_t::initialise(const led_pins_t &pins)
 	}
 
 	return true;
-}
-
-void led_service_t::set_bicolour(bool red, bool green)
-{
-	bicolour_red_ = red;
-	bicolour_green_ = green;
 }
 
 bool led_service_t::write_led(pin_t pin, led_polarity_t polarity, bool on)
@@ -107,13 +98,6 @@ void led_service_t::service(std::uint32_t now_ms, const led_command_t &command)
 		 (command.green == led_mode_t::flash_fast))
 	{
 		green_on = compute_flash(now_ms, command.green);
-	}
-
-	if ((command.red == led_mode_t::off) &&
-	    (command.green == led_mode_t::off))
-	{
-		red_on = bicolour_red_;
-		green_on = bicolour_green_;
 	}
 
 	module_on = ((now_ms / app_config_t::heartbeat_period_ms) % 2u) == 0u;

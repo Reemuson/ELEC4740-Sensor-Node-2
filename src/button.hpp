@@ -14,7 +14,7 @@
  */
 struct button_event_t final
 {
-	bool toggled;
+	bool pressed;
 };
 
 /**
@@ -41,12 +41,6 @@ struct button_service_t final
 		     button_event_t *out_event);
 
 	/**
-	 * @brief	Get current latched help state
-	 * @return	true if help is active, otherwise false
-	 */
-	bool help_is_active(void) const;
-
-	/**
 	 * @brief	Read button state without debouncing
 	 * @return	true if pressed, false otherwise
 	 *
@@ -60,8 +54,6 @@ private:
 	static volatile bool g_irq_flag;
 
 	pin_t pin_{PIN_INVALID};
-	bool help_latched_{false};
-
 	bool debounce_active_{false};
 	std::uint32_t debounce_start_ms_{0u};
 };

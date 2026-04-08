@@ -17,6 +17,9 @@ struct app_config_t final
 
 	static constexpr std::uint16_t adc_max_count = 4095u;
 	static constexpr std::uint32_t adc_reference_mv = 3362u;
+	static constexpr std::uint8_t adc_settle_discard_samples = 1u;
+	static constexpr std::uint8_t adc_pot_oversample_count = 8u;
+	static constexpr std::uint8_t adc_ntc_runtime_oversample_count = 10u;
 
 	static constexpr std::uint8_t ntc_max_oversample = 16u;
 
@@ -24,6 +27,10 @@ struct app_config_t final
 	static constexpr std::uint16_t ntc_storage_version = 1u;
 
 	static constexpr std::uint32_t ntc_series_resistor_ohms = 100000u;
+	static constexpr std::uint32_t ntc_series_resistor_ohms_min = 1000u;
+	static constexpr std::uint32_t ntc_series_resistor_ohms_max = 10000000u;
+	static constexpr std::uint32_t ntc_reference_mv_min = 1000u;
+	static constexpr std::uint32_t ntc_reference_mv_max = 5000u;
 
 	static constexpr float ntc_default_a = 0.0004393518f;
 	static constexpr float ntc_default_b = 0.0002531646f;
@@ -45,6 +52,7 @@ struct app_config_t final
 	static constexpr std::uint8_t pwm_duty_max = 255u;
 
 	static constexpr std::uint32_t debug_mode_hold_ms = 5000u;
+	static constexpr std::uint32_t debug_mode_confirm_window_ms = 6000u;
 	static constexpr std::uint32_t debug_mode_poll_ms = 20u;
 
 	static constexpr std::uint32_t debug_mode_indicator_ms = 5000u;

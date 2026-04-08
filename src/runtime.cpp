@@ -7,9 +7,9 @@
 
 namespace
 {
-	static volatile bool g_debug_mode = false;
-	static volatile bool g_calibration_active = false;
-	static volatile bool g_debug_prints_requested = false;
+	static bool g_debug_mode = false;
+	static bool g_calibration_active = false;
+	static bool g_debug_prints_requested = false;
 }
 
 void runtime_initialise(bool debug_mode)

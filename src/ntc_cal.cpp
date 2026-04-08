@@ -12,6 +12,76 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
+
+namespace
+{
+	static void ntc_clear_coefficients(ntc_sh_coefficients_t *out_coeff)
+	{
+		if (out_coeff == nullptr)
+		{
+			return;
+		}
+
+		out_coeff->a = 0.0f;
+		out_coeff->b = 0.0f;
+		out_coeff->c = 0.0f;
+	}
+
+	static void ntc_reset_point(ntc_cal_point_t *out_point)
+	{
+		if (out_point == nullptr)
+		{
+			return;
+		}
+
+		out_point->reference_valid = false;
+		out_point->sample_valid = false;
+		out_point->reference_temperature_centi_c = 0;
+		out_point->adc_count = 0u;
+		out_point->adc_mv = 0u;
+		out_point->ntc_resistance_ohms = 0u;
+	}
+
+	static bool ntc_point_is_ready(const ntc_cal_point_t &point)
+	{
+		return point.reference_valid && point.sample_valid;
+	}
+
+	static std::int32_t ntc_round_temperature_centi_c(float temperature_c)
+	{
+		float scaled = temperature_c * 100.0f;
+
+		if (scaled >= 0.0f)
+		{
+			scaled += 0.5f;
+		}
+		else
+		{
+			scaled -= 0.5f;
+		}
+
+		return static_cast<std::int32_t>(scaled);
+	}
+
+	static void ntc_print_coefficients(
+	    const char *label,
+	    bool valid,
+	    const ntc_sh_coefficients_t &coeff)
+	{
+		if (label == nullptr)
+		{
+			return;
+		}
+
+		Serial.printf("cal: %s_valid=%u A=%.9f B=%.9f C=%.9f\r\n",
+			      label,
+			      static_cast<unsigned>(valid ? 1u : 0u),
+			      static_cast<double>(coeff.a),
+			      static_cast<double>(coeff.b),
+			      static_cast<double>(coeff.c));
+	}
+}
 
 bool ntc_calibration_service_t::initialise(pin_t adc_pin)
 {
@@ -26,20 +96,15 @@ bool ntc_calibration_service_t::initialise(pin_t adc_pin)
 
 	for (i = 0u; i < 3u; i++)
 	{
-		points_[i].valid = false;
-		points_[i].reference_temperature_centi_c = 0;
-		points_[i].adc_count = 0u;
-		points_[i].adc_mv = 0u;
-		points_[i].ntc_resistance_ohms = 0u;
+		ntc_reset_point(&points_[i]);
 	}
 
 	line_length_ = 0u;
 	line_buffer_[0] = '\0';
 
 	coefficients_valid_ = false;
-	coefficients_.a = 0.0f;
-	coefficients_.b = 0.0f;
-	coefficients_.c = 0.0f;
+	ntc_clear_coefficients(&coefficients_);
+	clear_session_coefficients();
 
 	set_mode(mode_t::inactive);
 
@@ -100,24 +165,15 @@ bool ntc_calibration_service_t::get_coefficients(
 
 bool ntc_calibration_service_t::set_coefficients(ntc_sh_coefficients_t coeff)
 {
-	const float max_abs = 1.0e3f;
-
-	if (!std::isfinite(coeff.a) ||
-	    !std::isfinite(coeff.b) ||
-	    !std::isfinite(coeff.c))
-	{
-		return false;
-	}
-
-	if ((fabsf(coeff.a) > max_abs) ||
-	    (fabsf(coeff.b) > max_abs) ||
-	    (fabsf(coeff.c) > max_abs))
+	if (!coefficients_are_plausible(coeff))
 	{
 		return false;
 	}
 
 	coefficients_ = coeff;
 	coefficients_valid_ = true;
+	session_coefficients_ = coeff;
+	session_coefficients_valid_ = true;
 
 	return true;
 }
@@ -128,17 +184,16 @@ void ntc_calibration_service_t::clear_session(void)
 
 	for (i = 0u; i < 3u; i++)
 	{
-		points_[i].valid = false;
-		points_[i].reference_temperature_centi_c = 0;
-		points_[i].adc_count = 0u;
-		points_[i].adc_mv = 0u;
-		points_[i].ntc_resistance_ohms = 0u;
+		ntc_reset_point(&points_[i]);
 	}
 
-	coefficients_valid_ = false;
-	coefficients_.a = 0.0f;
-	coefficients_.b = 0.0f;
-	coefficients_.c = 0.0f;
+	clear_session_coefficients();
+}
+
+void ntc_calibration_service_t::clear_session_coefficients(void)
+{
+	session_coefficients_valid_ = false;
+	ntc_clear_coefficients(&session_coefficients_);
 }
 
 bool ntc_calibration_service_t::clear_eeprom(void)
@@ -155,6 +210,61 @@ bool ntc_calibration_service_t::clear_eeprom(void)
 	s.coefficients.c = 0.0f;
 
 	EEPROM.put(app_config_t::ntc_eeprom_address, s);
+
+	return true;
+}
+
+void ntc_calibration_service_t::load_factory_defaults(void)
+{
+	series_resistor_ohms_ = app_config_t::ntc_series_resistor_ohms;
+	reference_mv_ = app_config_t::adc_reference_mv;
+
+	coefficients_.a = app_config_t::ntc_default_a;
+	coefficients_.b = app_config_t::ntc_default_b;
+	coefficients_.c = app_config_t::ntc_default_c;
+	coefficients_valid_ = true;
+
+	session_coefficients_ = coefficients_;
+	session_coefficients_valid_ = true;
+}
+
+bool ntc_calibration_service_t::coefficients_are_plausible(
+    ntc_sh_coefficients_t coeff)
+{
+	const float max_abs = 1.0e3f;
+
+	if (!std::isfinite(coeff.a) ||
+	    !std::isfinite(coeff.b) ||
+	    !std::isfinite(coeff.c))
+	{
+		return false;
+	}
+
+	if ((fabsf(coeff.a) > max_abs) ||
+	    (fabsf(coeff.b) > max_abs) ||
+	    (fabsf(coeff.c) > max_abs))
+	{
+		return false;
+	}
+
+	return true;
+}
+
+bool ntc_calibration_service_t::settings_are_plausible(
+    std::uint32_t series_resistor_ohms,
+    std::uint32_t reference_mv)
+{
+	if ((series_resistor_ohms < app_config_t::ntc_series_resistor_ohms_min) ||
+	    (series_resistor_ohms > app_config_t::ntc_series_resistor_ohms_max))
+	{
+		return false;
+	}
+
+	if ((reference_mv < app_config_t::ntc_reference_mv_min) ||
+	    (reference_mv > app_config_t::ntc_reference_mv_max))
+	{
+		return false;
+	}
 
 	return true;
 }
@@ -284,22 +394,32 @@ void ntc_calibration_service_t::print_status(void) const
 	for (i = 0u; i < 3u; i++)
 	{
 		const ntc_cal_point_t &p = points_[i];
+		const bool point_ready = ntc_point_is_ready(p);
+		std::uint32_t adc_mv = p.adc_mv;
+		std::uint32_t resistance_ohms = p.ntc_resistance_ohms;
+
+		if (p.sample_valid)
+		{
+			(void)adc_count_to_mv(p.adc_count, &adc_mv);
+			(void)adc_mv_to_resistance_ohms(adc_mv, &resistance_ohms);
+		}
 
 		Serial.printf(
-		    "cal: p%u valid=%u t_ref=%ld adc=%u mv=%lu r=%lu\r\n",
+		    "cal: p%u ready=%u ref=%u sample=%u t_ref=%ld adc=%u mv=%lu r=%lu\r\n",
 		    static_cast<unsigned>(i + 1u),
-		    static_cast<unsigned>(p.valid ? 1u : 0u),
+		    static_cast<unsigned>(point_ready ? 1u : 0u),
+		    static_cast<unsigned>(p.reference_valid ? 1u : 0u),
+		    static_cast<unsigned>(p.sample_valid ? 1u : 0u),
 		    static_cast<long>(p.reference_temperature_centi_c),
 		    static_cast<unsigned>(p.adc_count),
-		    static_cast<unsigned long>(p.adc_mv),
-		    static_cast<unsigned long>(p.ntc_resistance_ohms));
+		    static_cast<unsigned long>(adc_mv),
+		    static_cast<unsigned long>(resistance_ohms));
 	}
 
-	Serial.printf("cal: coeff_valid=%u A=%.9f B=%.9f C=%.9f\r\n",
-		      static_cast<unsigned>(coefficients_valid_ ? 1u : 0u),
-		      static_cast<double>(coefficients_.a),
-		      static_cast<double>(coefficients_.b),
-		      static_cast<double>(coefficients_.c));
+	ntc_print_coefficients("coeff_active", coefficients_valid_, coefficients_);
+	ntc_print_coefficients("coeff_session",
+			       session_coefficients_valid_,
+			       session_coefficients_);
 }
 
 bool ntc_calibration_service_t::handle_command(const char *line)
@@ -387,15 +507,29 @@ bool ntc_calibration_service_t::handle_command(const char *line)
 	{
 		if (parse_u32_arg(line, "r_series_ohms", &u32))
 		{
+			if (!settings_are_plausible(u32, reference_mv_))
+			{
+				Serial.println("cal: r_series_ohms rejected");
+				return true;
+			}
+
 			series_resistor_ohms_ = u32;
-			Serial.println("cal: r_series_ohms updated");
+			clear_session_coefficients();
+			Serial.println("cal: r_series_ohms updated (re-solve required)");
 			return true;
 		}
 
 		if (parse_u32_arg(line, "ref_mv", &u32))
 		{
+			if (!settings_are_plausible(series_resistor_ohms_, u32))
+			{
+				Serial.println("cal: ref_mv rejected");
+				return true;
+			}
+
 			reference_mv_ = u32;
-			Serial.println("cal: ref_mv updated");
+			clear_session_coefficients();
+			Serial.println("cal: ref_mv updated (re-solve required)");
 			return true;
 		}
 
@@ -457,14 +591,22 @@ bool ntc_calibration_service_t::handle_command(const char *line)
 
 	if (std::strncmp(line, "cal save", 8) == 0)
 	{
-		if (!coefficients_valid_)
+		const ntc_sh_coefficients_t previous_coefficients = coefficients_;
+		const bool previous_coefficients_valid = coefficients_valid_;
+
+		if (!session_coefficients_valid_)
 		{
-			Serial.println("cal: save: no coefficients");
+			Serial.println("cal: save: no solved coefficients");
 			return true;
 		}
 
+		coefficients_ = session_coefficients_;
+		coefficients_valid_ = true;
+
 		if (!save_to_eeprom())
 		{
+			coefficients_ = previous_coefficients;
+			coefficients_valid_ = previous_coefficients_valid;
 			Serial.println("cal: save failed");
 			return true;
 		}
@@ -482,9 +624,12 @@ bool ntc_calibration_service_t::parse_u32_arg(
     const char *key,
     std::uint32_t *out_value) const
 {
+	unsigned long value = 0ul;
+	char tail = '\0';
 	const char *p = nullptr;
 	char pattern[32]{};
 	std::size_t n = 0u;
+	int matched = 0;
 
 	if ((line == nullptr) || (key == nullptr) || (out_value == nullptr))
 	{
@@ -505,7 +650,18 @@ bool ntc_calibration_service_t::parse_u32_arg(
 		return false;
 	}
 
-	*out_value = static_cast<std::uint32_t>(std::strtoul(p, nullptr, 10));
+	matched = std::sscanf(p, "%lu %c", &value, &tail);
+	if (matched != 1)
+	{
+		return false;
+	}
+
+	if (value > std::numeric_limits<std::uint32_t>::max())
+	{
+		return false;
+	}
+
+	*out_value = static_cast<std::uint32_t>(value);
 	return true;
 }
 
@@ -576,6 +732,8 @@ bool ntc_calibration_service_t::set_point(
 	}
 
 	points_[i].reference_temperature_centi_c = temp_centi_c;
+	points_[i].reference_valid = true;
+	clear_session_coefficients();
 	return true;
 }
 
@@ -601,6 +759,12 @@ bool ntc_calibration_service_t::analog_read_oversampled(
 	if (samples > app_config_t::ntc_max_oversample)
 	{
 		samples = app_config_t::ntc_max_oversample;
+	}
+
+	for (i = 0u; i < app_config_t::adc_settle_discard_samples; i++)
+	{
+		reading = analogRead(pin);
+		(void)reading;
 	}
 
 	for (i = 0u; i < samples; i++)
@@ -718,7 +882,8 @@ bool ntc_calibration_service_t::capture_point(std::uint8_t index)
 	points_[i].adc_count = adc;
 	points_[i].adc_mv = mv;
 	points_[i].ntc_resistance_ohms = r;
-	points_[i].valid = true;
+	points_[i].sample_valid = true;
+	clear_session_coefficients();
 
 	return true;
 }
@@ -748,12 +913,43 @@ bool ntc_calibration_service_t::solve_3x3(
 
 	for (i = 0; i < 3; i++)
 	{
-		const float pivot = aa[i][i];
+		int pivot_row = i;
+		float pivot_abs = fabsf(aa[i][i]);
+		float pivot = 0.0f;
 
-		if (fabsf(pivot) < 1e-12f)
+		for (k = i + 1; k < 3; k++)
+		{
+			const float candidate_abs = fabsf(aa[k][i]);
+
+			if (candidate_abs > pivot_abs)
+			{
+				pivot_abs = candidate_abs;
+				pivot_row = k;
+			}
+		}
+
+		if (pivot_abs < 1e-12f)
 		{
 			return false;
 		}
+
+		if (pivot_row != i)
+		{
+			float temp_b = bb[i];
+
+			bb[i] = bb[pivot_row];
+			bb[pivot_row] = temp_b;
+
+			for (j = 0; j < 3; j++)
+			{
+				const float temp_a = aa[i][j];
+
+				aa[i][j] = aa[pivot_row][j];
+				aa[pivot_row][j] = temp_a;
+			}
+		}
+
+		pivot = aa[i][i];
 
 		for (j = i; j < 3; j++)
 		{
@@ -793,15 +989,30 @@ bool ntc_calibration_service_t::solve_coefficients(void)
 	float a[3][3]{};
 	float b[3]{};
 	float x[3]{};
-
 	std::uint8_t i = 0u;
 
 	for (i = 0u; i < 3u; i++)
 	{
-		if (!points_[i].valid)
+		std::uint32_t adc_mv = 0u;
+		std::uint32_t resistance_ohms = 0u;
+
+		if (!ntc_point_is_ready(points_[i]))
 		{
 			return false;
 		}
+
+		if (!adc_count_to_mv(points_[i].adc_count, &adc_mv))
+		{
+			return false;
+		}
+
+		if (!adc_mv_to_resistance_ohms(adc_mv, &resistance_ohms))
+		{
+			return false;
+		}
+
+		points_[i].adc_mv = adc_mv;
+		points_[i].ntc_resistance_ohms = resistance_ohms;
 	}
 
 	for (i = 0u; i < 3u; i++)
@@ -827,10 +1038,17 @@ bool ntc_calibration_service_t::solve_coefficients(void)
 		return false;
 	}
 
-	coefficients_.a = x[0];
-	coefficients_.b = x[1];
-	coefficients_.c = x[2];
-	coefficients_valid_ = true;
+	session_coefficients_.a = x[0];
+	session_coefficients_.b = x[1];
+	session_coefficients_.c = x[2];
+
+	if (!coefficients_are_plausible(session_coefficients_))
+	{
+		clear_session_coefficients();
+		return false;
+	}
+
+	session_coefficients_valid_ = true;
 
 	return true;
 }
@@ -873,8 +1091,7 @@ bool ntc_calibration_service_t::adc_mv_to_temperature_centi_c(
 	t_k = 1.0f / inv_t;
 	t_c = t_k - 273.15f;
 
-	*out_temperature_centi_c =
-	    static_cast<std::int32_t>((t_c * 100.0f) + 0.5f);
+	*out_temperature_centi_c = ntc_round_temperature_centi_c(t_c);
 
 	return true;
 }
@@ -886,15 +1103,11 @@ bool ntc_calibration_service_t::load_from_eeprom(void)
 	EEPROM.get(app_config_t::ntc_eeprom_address, s);
 
 	if ((s.magic != app_config_t::ntc_storage_magic) ||
-	    (s.version != app_config_t::ntc_storage_version))
+	    (s.version != app_config_t::ntc_storage_version) ||
+	    !settings_are_plausible(s.series_resistor_ohms, s.reference_mv) ||
+	    !coefficients_are_plausible(s.coefficients))
 	{
-		/* EEPROM empty or invalid -> load factory defaults */
-
-		coefficients_.a = app_config_t::ntc_default_a;
-		coefficients_.b = app_config_t::ntc_default_b;
-		coefficients_.c = app_config_t::ntc_default_c;
-
-		coefficients_valid_ = true;
+		load_factory_defaults();
 
 		Serial.println("cal: using factory default coefficients");
 
@@ -906,6 +1119,7 @@ bool ntc_calibration_service_t::load_from_eeprom(void)
 
 	coefficients_ = s.coefficients;
 	coefficients_valid_ = true;
+	clear_session_coefficients();
 
 	Serial.println("cal: loaded coefficients from eeprom");
 
@@ -915,6 +1129,21 @@ bool ntc_calibration_service_t::load_from_eeprom(void)
 bool ntc_calibration_service_t::save_to_eeprom(void)
 {
 	ntc_cal_storage_t s{};
+
+	if (!coefficients_valid_)
+	{
+		return false;
+	}
+
+	if (!settings_are_plausible(series_resistor_ohms_, reference_mv_))
+	{
+		return false;
+	}
+
+	if (!coefficients_are_plausible(coefficients_))
+	{
+		return false;
+	}
 
 	s.magic = app_config_t::ntc_storage_magic;
 	s.version = app_config_t::ntc_storage_version;

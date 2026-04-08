@@ -67,8 +67,13 @@ static bool adc_read_oversampled(
 		samples = 32u;
 	}
 
-	reading = analogRead(pin);
-	(void)reading;
+	for (index = 0u;
+	     index < app_config_t::adc_settle_discard_samples;
+	     index++)
+	{
+		reading = analogRead(pin);
+		(void)reading;
+	}
 
 	for (index = 0u; index < samples; index++)
 	{
@@ -110,12 +115,16 @@ bool adc_service_t::sample(
 		return false;
 	}
 
-	if (!adc_read_oversampled(pot_pin, 8u, &pot_adc))
+	if (!adc_read_oversampled(pot_pin,
+				  app_config_t::adc_pot_oversample_count,
+				  &pot_adc))
 	{
 		return false;
 	}
 
-	if (!adc_read_oversampled(ntc_pin, 10u, &ntc_adc))
+	if (!adc_read_oversampled(ntc_pin,
+				  app_config_t::adc_ntc_runtime_oversample_count,
+				  &ntc_adc))
 	{
 		return false;
 	}

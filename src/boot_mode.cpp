@@ -3,7 +3,9 @@
  * @brief	Boot-time debug mode entry via help button hold
  */
 
-#include "mode.hpp"
+#include "boot_mode.hpp"
+
+#include "config.hpp"
 
 namespace
 {
@@ -59,7 +61,7 @@ boot_mode_t boot_mode_detect_debug(pin_t button_pin,
 			}
 		}
 
-		delay(10);
+		delay(app_config_t::debug_mode_poll_ms);
 	}
 
 	return r;

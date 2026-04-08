@@ -25,7 +25,6 @@ bool button_service_t::initialise(pin_t pin)
 	g_irq_flag = false;
 	attachInterrupt(pin_, isr_thunk, FALLING);
 
-	help_latched_ = false;
 	debounce_active_ = false;
 	debounce_start_ms_ = 0u;
 
@@ -54,7 +53,7 @@ bool button_service_t::service(
 		return false;
 	}
 
-	out_event->toggled = false;
+	out_event->pressed = false;
 
 	if (g_irq_flag)
 	{
@@ -81,13 +80,7 @@ bool button_service_t::service(
 		return true;
 	}
 
-	help_latched_ = !help_latched_;
-	out_event->toggled = true;
+	out_event->pressed = true;
 
 	return true;
-}
-
-bool button_service_t::help_is_active(void) const
-{
-	return help_latched_;
 }

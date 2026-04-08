@@ -70,18 +70,9 @@ struct led_service_t final
 	 */
 	void service(std::uint32_t now_ms, const led_command_t &command);
 
-	/**
-	 * @brief	Set steady bicolour indication
-	 * @param	red true to enable red channel
-	 * @param	green true to enable green channel
-	 */
-	void set_bicolour(bool red, bool green);
-
 private:
 	bool write_led(pin_t pin, led_polarity_t polarity, bool on);
 	bool compute_flash(std::uint32_t now_ms, led_mode_t mode);
 
 	led_pins_t pins_{};
-	bool bicolour_red_{false};
-	bool bicolour_green_{false};
 };

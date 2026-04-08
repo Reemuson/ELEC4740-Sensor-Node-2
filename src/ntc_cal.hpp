@@ -27,7 +27,8 @@ struct ntc_sh_coefficients_t final
  */
 struct ntc_cal_point_t final
 {
-	bool valid;
+	bool reference_valid;
+	bool sample_valid;
 	std::int32_t reference_temperature_centi_c;
 	std::uint16_t adc_count;
 	std::uint32_t adc_mv;
@@ -124,10 +125,25 @@ private:
 	void clear_session(void);
 
 	/**
+	 * @brief	Clear the current session solution without touching active coefficients
+	 */
+	void clear_session_coefficients(void);
+
+	/**
 	 * @brief	Invalidate stored calibration in EEPROM
 	 * @return	true on success, false otherwise
 	 */
 	bool clear_eeprom(void);
+
+	/**
+	 * @brief	Load firmware default calibration settings and coefficients
+	 */
+	void load_factory_defaults(void);
+
+	static bool coefficients_are_plausible(ntc_sh_coefficients_t coeff);
+	static bool settings_are_plausible(
+	    std::uint32_t series_resistor_ohms,
+	    std::uint32_t reference_mv);
 
 	bool load_from_eeprom(void);
 	bool save_to_eeprom(void);
@@ -189,6 +205,8 @@ private:
 
 	bool coefficients_valid_{false};
 	ntc_sh_coefficients_t coefficients_{};
+	bool session_coefficients_valid_{false};
+	ntc_sh_coefficients_t session_coefficients_{};
 
 	char line_buffer_[max_line_length + 1u]{};
 	std::uint8_t line_length_{0u};
